@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detector de Personas</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Detector de Personas</h1>
+            <p class="subtitle">Utilizando OpenCV y Hugging Face</p>
+        </header>
+
+        <main>
+            <div class="video-container">
+                <div class="camera-view">
+                    <img src="{{ url_for('video_feed') }}" alt="Video en vivo">
+                </div>
+                <div class="camera-controls">
+                    <button id="captureBtn" class="btn primary-btn">Capturar</button>
+                    <button id="toggleAutoBtn" class="btn">Auto-captura: ON</button>
+                </div>
+            </div>
+
+            <div class="results-container">
+                <div class="result-box" id="personStatus">
+                    <h2>Estado</h2>
+                    <div class="status-indicator" id="indicator">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Esperando...</span>
+                    </div>
+                    <div class="suggestion" id="suggestion">
+                        <p>Iniciando sistema de detección...</p>
+                    </div>
+                </div>
+
+                <div class="result-box">
+                    <h2>Objetos Detectados</h2>
+                    <div class="objects-list" id="objectsList">
+                        <p class="empty-message">Ningún objeto detectado aún</p>
+                    </div>
+                </div>
+
+                <div class="result-box">
+                    <h2>Historial de Detecciones</h2>
+                    <div class="history" id="historyList">
+                        <p class="empty-message">Sin historial disponible</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-container">
+                <h2>Configuración</h2>
+                <div class="settings-controls">
+                    <div class="setting-item">
+                        <label for="intervalRange">Intervalo de captura: <span id="intervalValue">5</span>s</label>
+                        <input type="range" id="intervalRange" min="1" max="30" value="5" class="slider">
+                    </div>
+                    <div class="setting-item">
+                        <label for="confidenceRange">Umbral de confianza: <span id="confidenceValue">0.8</span></label>
+                        <input type="range" id="confidenceRange" min="0.1" max="0.9" step="0.05" value="0.8" class="slider">
+                    </div>
+                    <div class="setting-item toggle">
+                        <label for="showBoxesToggle">Mostrar cajas delimitadoras</label>
+                        <label class="switch">
+                            <input type="checkbox" id="showBoxesToggle" checked>
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Desarrollado para MacBook M2 - Python 3.9+</p>
+        </footer>
+    </div>
+
+    <script>
+        // Estado de la aplicación
+        const appState = {
+            autoCapture: true,
+            showBoxes: true,
+            interval: 5,
+            confidence: 0.8,
+            lastResults: null
+        };
+
+        // Elementos DOM
+        const captureBtn = document.getElementById('captureBtn');
+        const toggleAutoBtn = document.getElementById('toggleAutoBtn');
+        const indicator = document.getElementById('indicator');
+        const suggestion = document.getElementById('suggestion');
+        const objectsList = document.getElementById('objectsList');
+        const historyList = document.getElementById('historyList');
+        const intervalRange = document.getElementById('intervalRange');
+        const intervalValue = document.getElementById('intervalValue');
+        const confidenceRange = document.getElementById('confidenceRange');
+        const confidenceValue = document.getElementById('confidenceValue');
+        const showBoxesToggle = document.getElementById('showBoxesToggle');
+
+        // Inicializar la aplicación
+        document.addEventListener('DOMContentLoaded', () => {
+            // Actualizar el estado inicial
+            updateStatus();
+
+            // Eventos de botones
+            captureBtn.addEventListener('click', captureImage);
+            toggleAutoBtn.addEventListener('click', toggleAutoCapture);
+            
+            // Eventos de configuración
+            intervalRange.addEventListener('input', updateIntervalValue);
+            intervalRange.addEventListener('change', updateSettings);
+            confidenceRange.addEventListener('input', updateConfidenceValue);
+            confidenceRange.addEventListener('change', updateSettings);
+            showBoxesToggle.addEventListener('change', updateSettings);
+            
+            // Actualizar periódicamente
+            setInterval(updateStatus, 2000);
+        });
+
+        // Capturar imagen manualmente
+        function captureImage() {
+            captureBtn.disabled = true;
+            captureBtn.innerText = "Capturando...";
+            
+            fetch('/api/detect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateUI(data);
+                } else {
+                    showError("Error al capturar la imagen");
+                }
+            })
+            .catch(error => {
+                showError("Error de conexión");
+                console.error(error);
+            })
+            .finally(() => {
+                captureBtn.disabled = false;
+                captureBtn.innerText = "Capturar";
+            });
+        }
+
+        // Alternar la captura automática
+        function toggleAutoCapture() {
+            appState.autoCapture = !appState.autoCapture;
+            toggleAutoBtn.innerText = `Auto-captura: ${appState.autoCapture ? 'ON' : 'OFF'}`;
+            toggleAutoBtn.classList.toggle('active', appState.autoCapture);
+            
+            updateSettings();
+        }
+
+        // Actualizar valor del intervalo
+        function updateIntervalValue() {
+            appState.interval = parseInt(intervalRange.value);
+            intervalValue.innerText = appState.interval;
+        }
+
+        // Actualizar valor del umbral de confianza
+        function updateConfidenceValue() {
+            appState.confidence = parseFloat(confidenceRange.value);
+            confidenceValue.innerText = appState.confidence;
+        }
+
+        // Actualizar la configuración
+        function updateSettings() {
+            appState.showBoxes = showBoxesToggle.checked;
+            
+            fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    auto_capture: appState.autoCapture,
+                    interval: appState.interval,
+                    confidence: appState.confidence,
+                    show_boxes: appState.showBoxes
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Configuración actualizada:", data);
+            })
+            .catch(error => {
+                console.error("Error al actualizar la configuración:", error);
+            });
+        }
+
+        // Actualizar el estado desde el servidor
+        function updateStatus() {
+            fetch('/api/status')
+            .then(response => response.json())
+            .then(data => {
+                // Guardar configuración actual
+                if (data.settings) {
+                    appState.autoCapture = data.settings.auto_capture;
+                    appState.showBoxes = data.settings.show_boxes;
+                    appState.interval = data.settings.interval;
+                    appState.confidence = data.settings.confidence;
+                    
+                    // Actualizar controles
+                    toggleAutoBtn.innerText = `Auto-captura: ${appState.autoCapture ? 'ON' : 'OFF'}`;
+                    toggleAutoBtn.classList.toggle('active', appState.autoCapture);
+                    intervalRange.value = appState.interval;
+                    intervalValue.innerText = appState.interval;
+                    confidenceRange.value = appState.confidence;
+                    confidenceValue.innerText = appState.confidence;
+                    showBoxesToggle.checked = appState.showBoxes;
+                }
+                
+                // Actualizar UI con nuevos resultados
+                updateUI(data);
+            })
+            .catch(error => {
+                console.error("Error al actualizar el estado:", error);
+            });
+        }
+
+        // Actualizar la interfaz de usuario con nuevos resultados
+        function updateUI(data) {
+            appState.lastResults = data;
+            
+            // Actualizar indicador de personas
+            indicator.querySelector('.status-dot').className = 'status-dot ' + 
+                (data.has_person ? 'detected' : 'not-detected');
+            indicator.querySelector('.status-text').innerText = 
+                data.has_person ? 'Persona Detectada' : 'No se detectaron personas';
+            
+            // Actualizar sugerencia
+            suggestion.innerHTML = `<p>${data.suggestion}</p>`;
+            
+            // Actualizar lista de objetos
+            if (data.objects && data.objects.length > 0) {
+                objectsList.innerHTML = data.objects
+                    .map(obj => `<div class="object-item">
+                        <span class="object-label">${obj.label}</span>
+                        <span class="object-score">Confianza: ${(obj.score * 100).toFixed(1)}%</span>
+                    </div>`)
+                    .join('');
+            } else {
+                objectsList.innerHTML = '<p class="empty-message">Ningún objeto detectado</p>';
+            }
+            
+            // Actualizar historial
+            if (data.history && data.history.length > 0) {
+                historyList.innerHTML = data.history
+                    .map(entry => `<div class="history-item">
+                        <div class="history-header">
+                            <span class="history-time">${entry.timestamp}</span>
+                            <span class="history-status ${entry.has_person ? 'detected' : 'not-detected'}">
+                                ${entry.has_person ? '✓ Persona' : '✗ Sin persona'}
+                            </span>
+                        </div>
+                        <div class="history-objects">
+                            ${entry.objects.length > 0 ? entry.objects.join(', ') : 'Sin objetos'}
+                        </div>
+                    </div>`)
+                    .join('');
+            } else {
+                historyList.innerHTML = '<p class="empty-message">Sin historial disponible</p>';
+            }
+        }
+
+        // Mostrar un mensaje de error
+        function showError(message) {
+            suggestion.innerHTML = `<p class="error">${message}</p>`;
+            setTimeout(() => {
+                if (appState.lastResults) {
+                    suggestion.innerHTML = `<p>${appState.lastResults.suggestion}</p>`;
+                } else {
+                    suggestion.innerHTML = '<p>Esperando resultados...</p>';
+                }
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
